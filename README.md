@@ -21,7 +21,9 @@ To enable this listener in a project using the 'standard HSAC maven setup':
 * set the maven property `extraFailsafeListeners` to `nl.hsac.fitnesse.junit.allure.JUnitAllureFrameworkListener`.
 
 The listener creates data for Allure reporting in `target/allure-results`, to get an actual report you still need to
-generate one based on these results. 
+generate one based on these results.
+
+* If you wish to ignore SuiteSetUp and SuiteTearDown test pages in Allure, this can be achieved by setting system property skipSpecialPagesInAllure to true (`skipSpecialPagesInAllure=true`)
 
 ## Generating Allure Report
 

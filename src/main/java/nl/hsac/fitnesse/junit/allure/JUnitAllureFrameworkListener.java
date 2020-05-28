@@ -1,10 +1,8 @@
 package nl.hsac.fitnesse.junit.allure;
 
 import fitnesse.junit.FitNessePageAnnotation;
-import fitnesse.junit.FitNesseRunner;
 import fitnesse.wiki.WikiPage;
 import nl.hsac.fitnesse.fixture.Environment;
-import nl.hsac.fitnesse.junit.HsacFitNesseRunner;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.FilenameUtils;
 import org.junit.runner.Description;
@@ -42,15 +40,18 @@ import java.util.regex.Pattern;
 /**
  * JUnit listener for Allure Framework. Based on default ru.yandex.qatools.allure.junit.AllureRunListener
  */
+
 public class JUnitAllureFrameworkListener extends RunListener {
     private static final String SCREENSHOT_EXT = "png";
     private static final String PAGESOURCE_EXT = "html";
     private static final Pattern SCREENSHOT_PATTERN = Pattern.compile("href=\"([^\"]*." + SCREENSHOT_EXT + ")\"");
     private static final Pattern PAGESOURCE_PATTERN = Pattern.compile("href=\"([^\"]*." + PAGESOURCE_EXT + ")\"");
+    private static final Pattern SPECIAL_PAGE_PATTERN = Pattern.compile(".*(\\.SuiteSetUp|\\.SuiteTearDown)$");
     private final Environment hsacEnvironment = Environment.getInstance();
     private final HashMap<String, String> suites;
-    protected final Label hostLabel;
+    private final Label hostLabel;
     private final Allure allure;
+    private boolean skipSpecialPages;
 
     public JUnitAllureFrameworkListener() {
         this.allure = Allure.LIFECYCLE;
@@ -64,71 +65,80 @@ public class JUnitAllureFrameworkListener extends RunListener {
         hostLabel = new Label();
         hostLabel.setName("host");
         hostLabel.setValue(hostName);
+        skipSpecialPages = null != System.getProperty("skipSpecialPagesInAllure") ?
+                Boolean.valueOf(System.getProperty("skipSpecialPagesInAllure")) : false;
     }
 
     private void testSuiteStarted(Description description) {
-        String uid = this.generateSuiteUid(description.getDisplayName());
-        String suiteName = System.getProperty(HsacFitNesseRunner.SUITE_OVERRIDE_VARIABLE_NAME);
-        if (null == suiteName) {
-            suiteName = description.getAnnotation(FitNesseRunner.Suite.class).value();
-        }
+            String uid = this.generateSuiteUid(description.getDisplayName());
+            String suiteName = description.getClassName();
 
-        TestSuiteStartedEvent event = new TestSuiteStartedEvent(uid, suiteName);
-        AnnotationManager am = new AnnotationManager(description.getAnnotations());
-        am.update(event);
-        event.withLabels(AllureModelUtils.createTestFrameworkLabel("FitNesse"));
-        getAllure().fire(event);
-    }
-
-
-    public void testStarted(Description description) {
-        FitNessePageAnnotation pageAnn = description.getAnnotation(FitNessePageAnnotation.class);
-        if (pageAnn != null) {
-            TestCaseStartedEvent event = new TestCaseStartedEvent(this.getSuiteUid(description), description.getMethodName());
+            TestSuiteStartedEvent event = new TestSuiteStartedEvent(uid, suiteName);
             AnnotationManager am = new AnnotationManager(description.getAnnotations());
             am.update(event);
-
-            this.fireClearStepStorage();
+            event.withLabels(AllureModelUtils.createTestFrameworkLabel("FitNesse"));
             getAllure().fire(event);
+        }
 
-            WikiPage page = pageAnn.getWikiPage();
-            addLabels(page);
+    @Override
+    public void testStarted(Description description) {
+        if (reportTestPage(description.getMethodName())) {
+            FitNessePageAnnotation pageAnn = description.getAnnotation(FitNessePageAnnotation.class);
+            if (pageAnn != null) {
+                TestCaseStartedEvent event = new TestCaseStartedEvent(this.getSuiteUid(description), description.getMethodName());
+                AnnotationManager am = new AnnotationManager(description.getAnnotations());
+                am.update(event);
+
+                this.fireClearStepStorage();
+                getAllure().fire(event);
+
+                WikiPage page = pageAnn.getWikiPage();
+                addLabels(page);
+            }
         }
     }
 
+    @Override
     public void testFailure(Failure failure) {
         Description description = failure.getDescription();
-        if (description.isTest()) {
-            Throwable exception = failure.getException();
-            List<Pattern> patterns = new ArrayList<>();
-            patterns.add(SCREENSHOT_PATTERN);
-            patterns.add(PAGESOURCE_PATTERN);
-            processAttachments(exception, patterns);
+        if (reportTestPage(description.getMethodName())) {
+            if (description.isTest()) {
+                Throwable exception = failure.getException();
+                List<Pattern> patterns = new ArrayList<>();
+                patterns.add(SCREENSHOT_PATTERN);
+                patterns.add(PAGESOURCE_PATTERN);
+                processAttachments(exception, patterns);
 
-            this.fireTestCaseFailure(exception);
-            this.recordTestResult(description);
+                this.fireTestCaseFailure(exception);
+                this.recordTestResult(description);
 
-        } else {
-            this.startFakeTestCase(description);
-            this.fireTestCaseFailure(failure.getException());
-            this.finishFakeTestCase();
+            } else {
+                this.startFakeTestCase(description);
+                this.fireTestCaseFailure(failure.getException());
+                this.finishFakeTestCase();
+            }
         }
     }
 
+    @Override
     public void testAssumptionFailure(Failure failure) {
         this.testFailure(failure);
     }
 
+    @Override
     public void testFinished(Description description) {
-        String methodName = description.getMethodName();
-        makeAttachment(fitnesseResult(methodName).getBytes(), "FitNesse Result page", "text/html");
-        getAllure().fire(new TestCaseFinishedEvent());
+        if (reportTestPage(description.getMethodName())) {
+            String methodName = description.getMethodName();
+            makeAttachment(fitnesseResult(methodName).getBytes(), "FitNesse Result page", "text/html");
+            getAllure().fire(new TestCaseFinishedEvent());
+        }
     }
 
     private void testSuiteFinished(String uid) {
         getAllure().fire(new TestSuiteFinishedEvent(uid));
     }
 
+    @Override
     public void testRunFinished(Result result) throws IOException {
 
         for (String uid : this.getSuites().values()) {
@@ -182,7 +192,7 @@ public class JUnitAllureFrameworkListener extends RunListener {
         return this.allure;
     }
 
-    public Map<String, String> getSuites() {
+    private Map<String, String> getSuites() {
         return this.suites;
     }
 
@@ -250,7 +260,7 @@ public class JUnitAllureFrameworkListener extends RunListener {
         getAllure().fire(event);
     }
 
-    protected List<Label> createLabels(WikiPage page) {
+    private List<Label> createLabels(WikiPage page) {
         List<Label> labels = new ArrayList<>();
 
         String suiteName = page.getParent().getName();
@@ -272,12 +282,16 @@ public class JUnitAllureFrameworkListener extends RunListener {
         return labels;
     }
 
-    protected String[] getTags(WikiPage page) {
+    private String[] getTags(WikiPage page) {
         String[] tags = new String[0];
         String tagInfo = page.getData().getProperties().get("Suites");
         if (null != tagInfo) {
             tags = tagInfo.split(",");
         }
         return tags;
+    }
+
+    private boolean reportTestPage(String pageName) {
+        return !skipSpecialPages || !SPECIAL_PAGE_PATTERN.matcher(pageName).matches();
     }
 }
